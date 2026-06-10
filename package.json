@@ -12,15 +12,22 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "install:server": "cd server && npm install",
-    "build:all": "npm run build && npm run install:server",
+    "build:all": "npm run build",
     "start": "node server/index.js"
   },
   "dependencies": {
+    "@vitalets/google-translate-api": "^9.2.1",
     "axios": "^1.17.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "lucide-react": "^1.17.0",
+    "node-cache": "^5.1.2",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "recharts": "^3.8.1"
+    "recharts": "^3.8.1",
+    "rss-parser": "^3.13.0",
+    "technicalindicators": "^3.1.0",
+    "yahoo-finance2": "^3.15.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
