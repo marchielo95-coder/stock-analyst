@@ -45,8 +45,9 @@ export default function PriceChart({ data, support, resistance, range = '1Y' }) 
 
   const formatted = data.map(d => ({ ...d, dateLabel: formatDate(d.date, range) }));
   const prices = data.map(d => d.close).filter(Boolean);
-  const minPrice = Math.min(...prices) * 0.975;
-  const maxPrice = Math.max(...prices) * 1.025;
+  const padding = range === '1D' ? 0.002 : range === '5D' ? 0.005 : 0.025;
+  const minPrice = Math.min(...prices) * (1 - padding);
+  const maxPrice = Math.max(...prices) * (1 + padding);
 
   // Reduce tick density for large datasets
   const tickCount = data.length > 200 ? 8 : data.length > 60 ? 10 : 12;
