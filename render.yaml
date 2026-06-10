@@ -1,31 +1,11 @@
 services:
-  # ── Backend API ──────────────────────────────────────────────
+  # Un solo servicio: Express sirve la API + el frontend compilado
   - type: web
-    name: stock-analyst-api
+    name: stock-analyst
     runtime: node
-    rootDir: server
-    buildCommand: npm install
-    startCommand: node index.js
-    plan: free
+    buildCommand: npm install && cd server && npm install && cd .. && npm run build
+    startCommand: node server/index.js
+    plan: starter
     envVars:
       - key: NODE_ENV
         value: production
-
-  # ── Frontend Static Site ─────────────────────────────────────
-  - type: web
-    name: stock-analyst-app
-    runtime: static
-    buildCommand: npm install && npm run build
-    staticPublishPath: ./dist
-    plan: free
-    envVars:
-      - key: VITE_API_URL
-        value: https://stock-analyst-api.onrender.com
-    headers:
-      - path: /*
-        name: Cache-Control
-        value: no-cache
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html

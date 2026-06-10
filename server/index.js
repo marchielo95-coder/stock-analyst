@@ -310,4 +310,18 @@ app.get('/api/quote/:ticker', async (req, res) => {
   } catch { res.status(404).json({ error: 'Ticker no encontrado' }); }
 });
 
-app.listen(3002, () => console.log('Stock Analyst API :3002'));
+// ── Serve frontend in production ──────────────────────────────
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+if (process.env.NODE_ENV === 'production') {
+  const distPath = join(__dirname, '..', 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(join(distPath, 'index.html'));
+  });
+}
+
+const PORT = process.env.PORT || 3002;
+app.listen(PORT, () => console.log(`Stock Analyst API :${PORT}`));
