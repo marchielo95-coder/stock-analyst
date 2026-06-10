@@ -216,7 +216,17 @@ app.get('/api/analysis/:ticker', async (req, res) => {
         : Promise.resolve(null),
     ]);
 
-    const chartQuotes = chartHist.quotes.filter(q => q.close != null);
+    const rawChartQuotes = chartHist.quotes.filter(q => q.close != null);
+    // For 1D: only show regular market hours (9:30–16:00 ET)
+    const chartQuotes = range === '1D'
+      ? rawChartQuotes.filter(q => {
+          const d = new Date(q.date);
+          const etHour = d.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false });
+          const etMin  = d.toLocaleString('en-US', { timeZone: 'America/New_York', minute: 'numeric' });
+          const mins = parseInt(etHour) * 60 + parseInt(etMin);
+          return mins >= 570 && mins <= 960; // 9:30 (570) to 16:00 (960)
+        })
+      : rawChartQuotes;
     const dailyQuotes = isIntraday
       ? (fullHist?.quotes ?? []).filter(q => q.close)
       : cfg.historyDays > cfg.chartDays
