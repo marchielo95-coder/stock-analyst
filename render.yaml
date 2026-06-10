@@ -6,6 +6,7 @@ services:
     rootDir: server
     buildCommand: npm install
     startCommand: node index.js
+    plan: free
     envVars:
       - key: NODE_ENV
         value: production
@@ -16,6 +17,7 @@ services:
     runtime: static
     buildCommand: npm install && npm run build
     staticPublishPath: ./dist
+    plan: free
     envVars:
       - key: VITE_API_URL
         value: https://stock-analyst-api.onrender.com
