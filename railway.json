@@ -6,7 +6,6 @@
   "deploy": {
     "buildCommand": "npm run build:all",
     "startCommand": "node server/index.js",
-    "healthcheckPath": "/api/quote/AAPL",
-    "restartPolicyType": "ON_FAILURE"
+"restartPolicyType": "ON_FAILURE"
   }
 }

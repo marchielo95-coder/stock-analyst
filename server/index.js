@@ -149,6 +149,7 @@ async function computePortfolio(positions) {
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
+app.get('/health', (_, res) => res.json({ ok: true }));
 
 // GET /api/portfolio  (default portfolio)
 app.get('/api/portfolio', async (req, res) => {
