@@ -7,6 +7,11 @@ import { translate } from '@vitalets/google-translate-api';
 
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || 'd8lbdbhr01qtamgtrflgd8lbdbhr01qtamgtrfm0';
 const FINNHUB = 'https://finnhub.io/api/v1';
+const YF_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
 
 const app = express();
 const cache      = new NodeCache({ stdTTL: 900 });
@@ -47,17 +52,32 @@ async function fhQuote(ticker) {
   return fhGet(`/quote?symbol=${ticker}`);
 }
 
-async function fhCandles(ticker, resolution, from, to) {
-  const data = await fhGet(`/stock/candle?symbol=${ticker}&resolution=${resolution}&from=${from}&to=${to}`);
-  if (data.s !== 'ok' || !data.t?.length) return [];
-  return data.t.map((t, i) => ({
-    date: new Date(t * 1000),
-    open:   data.o[i],
-    high:   data.h[i],
-    low:    data.l[i],
-    close:  data.c[i],
-    volume: data.v[i],
-  }));
+// Yahoo Finance v8 chart — direct HTTP, no library needed
+const YF_INTERVAL_MAP = { '5': '5m', '30': '30m', 'D': '1d', 'W': '1wk' };
+const YF_RANGE_MAP    = { 1: '1d', 5: '5d', 30: '1mo', 180: '6mo', 365: '1y', 1825: '5y', 400: '2y', 2500: '10y' };
+
+async function yfCandles(ticker, resolution, chartDays, historyDays) {
+  const interval = YF_INTERVAL_MAP[resolution] || '1d';
+  const days = historyDays || chartDays;
+  // Pick closest range string
+  const rangeKey = [1,5,30,180,365,1825,400,2500].reduce((prev, cur) =>
+    Math.abs(cur - days) < Math.abs(prev - days) ? cur : prev);
+  const range = YF_RANGE_MAP[rangeKey] || '2y';
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${interval}&range=${range}&includePrePost=false`;
+  const res = await fetch(url, { headers: YF_HEADERS });
+  if (!res.ok) throw new Error(`YF chart ${ticker} → ${res.status}`);
+  const json = await res.json();
+  const result = json.chart?.result?.[0];
+  if (!result?.timestamp) return [];
+  const { timestamp, indicators: { quote: [q] } } = result;
+  return timestamp.map((t, i) => ({
+    date:   new Date(t * 1000),
+    open:   q.open[i],
+    high:   q.high[i],
+    low:    q.low[i],
+    close:  q.close[i],
+    volume: q.volume[i],
+  })).filter(d => d.close != null);
 }
 
 async function fhProfile(ticker) {
@@ -152,13 +172,10 @@ async function translateText(text) {
 
 // ─── Portfolio compute helper ─────────────────────────────────────────────────
 async function computePortfolio(positions) {
-  const now = Math.floor(Date.now() / 1000);
-  const from400 = now - 400 * 86400;
-
   const results = await Promise.all(positions.map(async (pos) => {
     const [quote, candles, profile] = await Promise.all([
       fhQuote(pos.ticker),
-      fhCandles(pos.ticker, 'D', from400, now),
+      yfCandles(pos.ticker, 'D', 400, 400),
       fhProfile(pos.ticker),
     ]);
 
@@ -242,15 +259,12 @@ app.get('/api/analysis/:ticker', async (req, res) => {
     const cached = cache.get(cacheKey);
     if (cached) return res.json(cached);
 
-    const now      = Math.floor(Date.now() / 1000);
-    const fromChart = now - cfg.chartDays * 86400;
-    const fromHist  = now - cfg.historyDays * 86400;
     const isIntraday = range === '1D' || range === '5D';
 
     const [quote, chartCandles, histCandles, profile, metric] = await Promise.all([
       fhQuote(ticker),
-      fhCandles(ticker, cfg.resolution, fromChart, now),
-      isIntraday ? fhCandles(ticker, 'D', fromHist, now) : Promise.resolve(null),
+      yfCandles(ticker, cfg.resolution, cfg.chartDays, null),
+      isIntraday ? yfCandles(ticker, 'D', cfg.historyDays, cfg.historyDays) : Promise.resolve(null),
       fhProfile(ticker),
       fhMetric(ticker),
     ]);
