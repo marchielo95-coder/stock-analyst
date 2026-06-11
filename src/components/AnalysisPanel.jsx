@@ -1,5 +1,4 @@
-import PriceChart from './PriceChart';
-import IndicatorCharts from './IndicatorCharts';
+import TradingViewChart from './TradingViewChart';
 import NewsFeed from './NewsFeed';
 import TimeRangeSelector from './TimeRangeSelector';
 import InfoTooltip from './InfoTooltip';
@@ -214,34 +213,14 @@ export default function AnalysisPanel({ data, news, ticker, position, range, onR
         </div>
       </div>
 
-      {/* ── PRICE CHART ────────────────────────────────────────── */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <SectionTitle style={{ margin: 0 }}>Precio + MA50/MA200</SectionTitle>
-            <div style={{ display: 'flex', gap: 12 }}>
-              {[['MA50', '#f59e0b'], ['MA200', '#a78bfa']].map(([label, color]) => (
-                <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--muted)' }}>
-                  <span style={{ width: 18, height: 2, background: color, display: 'inline-block', borderRadius: 2 }} />
-                  {label}
-                </span>
-              ))}
-            </div>
-          </div>
+      {/* ── TRADINGVIEW CHART ──────────────────────────────────── */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
+          <SectionTitle style={{ margin: 0 }}>📈 Gráfico en tiempo real</SectionTitle>
           <TimeRangeSelector selected={range} onChange={onRangeChange} />
         </div>
-        {chartLoading ? (
-          <div style={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--muted)' }}>
-            <Loader2 size={20} className="animate-spin" style={{ color: 'var(--accent)' }} />
-            <span style={{ fontSize: 13 }}>Cargando datos…</span>
-          </div>
-        ) : (
-          <PriceChart data={chartData} support={support} resistance={resistance} range={range} />
-        )}
+        <TradingViewChart ticker={ticker} range={range} />
       </div>
-
-      {/* ── RSI + MACD ─────────────────────────────────────────── */}
-      <IndicatorCharts rsiData={rsiData} macdData={macdData} indicators={indicators} range={range} onRangeChange={onRangeChange} />
 
       {/* ── NEWS ───────────────────────────────────────────────── */}
       <NewsFeed news={news} ticker={ticker} />
