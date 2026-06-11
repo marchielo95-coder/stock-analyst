@@ -1,11 +1,12 @@
 import express from 'express';
 import cors from 'cors';
-import YahooFinance from 'yahoo-finance2';
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 import Parser from 'rss-parser';
 import NodeCache from 'node-cache';
 import { RSI, MACD, SMA } from 'technicalindicators';
 import { translate } from '@vitalets/google-translate-api';
+
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY || 'd8lbdbhr01qtamgtrflgd8lbdbhr01qtamgtrfm0';
+const FINNHUB = 'https://finnhub.io/api/v1';
 
 const app = express();
 const cache      = new NodeCache({ stdTTL: 900 });
@@ -26,13 +27,46 @@ const ALERT_RULES = { stopLoss: -0.07, takeProfit: 0.15, rsiOversold: 35 };
 
 // ─── Range config ─────────────────────────────────────────────────────────────
 const RANGE_CONFIG = {
-  '1D':  { chartDays: 1,    interval: '5m',  historyDays: 400, ttl: 60   },
-  '5D':  { chartDays: 5,    interval: '30m', historyDays: 400, ttl: 300  },
-  '1M':  { chartDays: 30,   interval: '1d',  historyDays: 400, ttl: 900  },
-  '6M':  { chartDays: 180,  interval: '1d',  historyDays: 400, ttl: 900  },
-  '1Y':  { chartDays: 365,  interval: '1d',  historyDays: 400, ttl: 900  },
-  '5Y':  { chartDays: 1825, interval: '1wk', historyDays: 2500, ttl: 3600 },
+  '1D':  { chartDays: 1,    resolution: '5',  historyDays: 400, ttl: 60   },
+  '5D':  { chartDays: 5,    resolution: '30', historyDays: 400, ttl: 300  },
+  '1M':  { chartDays: 30,   resolution: 'D',  historyDays: 400, ttl: 900  },
+  '6M':  { chartDays: 180,  resolution: 'D',  historyDays: 400, ttl: 900  },
+  '1Y':  { chartDays: 365,  resolution: 'D',  historyDays: 400, ttl: 900  },
+  '5Y':  { chartDays: 1825, resolution: 'W',  historyDays: 2500, ttl: 3600 },
 };
+
+// ─── Finnhub helpers ──────────────────────────────────────────────────────────
+async function fhGet(path) {
+  const url = `${FINNHUB}${path}&token=${FINNHUB_KEY}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Finnhub ${path} → ${res.status}`);
+  return res.json();
+}
+
+async function fhQuote(ticker) {
+  return fhGet(`/quote?symbol=${ticker}`);
+}
+
+async function fhCandles(ticker, resolution, from, to) {
+  const data = await fhGet(`/stock/candle?symbol=${ticker}&resolution=${resolution}&from=${from}&to=${to}`);
+  if (data.s !== 'ok' || !data.t?.length) return [];
+  return data.t.map((t, i) => ({
+    date: new Date(t * 1000),
+    open:   data.o[i],
+    high:   data.h[i],
+    low:    data.l[i],
+    close:  data.c[i],
+    volume: data.v[i],
+  }));
+}
+
+async function fhProfile(ticker) {
+  return fhGet(`/stock/profile2?symbol=${ticker}`);
+}
+
+async function fhMetric(ticker) {
+  return fhGet(`/stock/metric?symbol=${ticker}&metric=all`);
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function calcIndicators(closes) {
@@ -118,28 +152,33 @@ async function translateText(text) {
 
 // ─── Portfolio compute helper ─────────────────────────────────────────────────
 async function computePortfolio(positions) {
+  const now = Math.floor(Date.now() / 1000);
+  const from400 = now - 400 * 86400;
+
   const results = await Promise.all(positions.map(async (pos) => {
-    const quote = await yahooFinance.quote(pos.ticker);
-    const hist  = await yahooFinance.chart(pos.ticker, { period1: new Date(Date.now() - 400 * 86400000), interval: '1d' });
-    const quotes = hist.quotes.filter(q => q.close);
-    const closes = quotes.map(q => q.close);
-    const ind = calcIndicators(closes);
-    const { support, resistance } = calcSupportResistance(quotes);
-    const currentPrice = quote.regularMarketPrice;
+    const [quote, candles, profile] = await Promise.all([
+      fhQuote(pos.ticker),
+      fhCandles(pos.ticker, 'D', from400, now),
+      fhProfile(pos.ticker),
+    ]);
+
+    const ind = calcIndicators(candles.map(q => q.close));
+    const { support, resistance } = calcSupportResistance(candles);
+    const currentPrice = quote.c;
     const marketValue  = currentPrice * pos.shares;
     const costBasis    = pos.entryPrice * pos.shares;
     const pnl = marketValue - costBasis;
-    const name = pos.name || quote.longName || quote.shortName || pos.ticker;
+    const name = pos.name || profile.name || pos.ticker;
 
     return {
       ...pos, name, currentPrice,
-      dailyChange: quote.regularMarketChange,
-      dailyChangePct: quote.regularMarketChangePercent,
+      dailyChange: quote.d,
+      dailyChangePct: quote.dp,
       marketValue, costBasis, pnl, pnlPct: (pnl / costBasis) * 100,
       indicators: { rsi: ind.rsi, macd: ind.macd, ma50: ind.ma50, ma200: ind.ma200 },
       support, resistance,
       alerts: getAlerts(pos.ticker, currentPrice, pos.entryPrice, ind),
-      chartData: quotes.slice(-180).map(q => ({ date: q.date, close: q.close, volume: q.volume })),
+      chartData: candles.slice(-180).map(q => ({ date: q.date, close: q.close, volume: q.volume })),
     };
   }));
 
@@ -186,8 +225,8 @@ app.get('/api/price/:ticker', async (req, res) => {
     const cacheKey = `price_${ticker}`;
     const cached = shortCache.get(cacheKey);
     if (cached) return res.json(cached);
-    const q = await yahooFinance.quote(ticker);
-    const payload = { ticker, price: q.regularMarketPrice, change: q.regularMarketChange, changePct: q.regularMarketChangePercent, high: q.regularMarketDayHigh, low: q.regularMarketDayLow, volume: q.regularMarketVolume, timestamp: new Date().toISOString() };
+    const q = await fhQuote(ticker);
+    const payload = { ticker, price: q.c, change: q.d, changePct: q.dp, high: q.h, low: q.l, volume: 0, timestamp: new Date().toISOString() };
     shortCache.set(cacheKey, payload);
     res.json(payload);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -203,41 +242,35 @@ app.get('/api/analysis/:ticker', async (req, res) => {
     const cached = cache.get(cacheKey);
     if (cached) return res.json(cached);
 
+    const now      = Math.floor(Date.now() / 1000);
+    const fromChart = now - cfg.chartDays * 86400;
+    const fromHist  = now - cfg.historyDays * 86400;
     const isIntraday = range === '1D' || range === '5D';
 
-    const chartPeriod1 = new Date(Date.now() - cfg.chartDays * 86400000);
-    const histPeriod1  = new Date(Date.now() - cfg.historyDays * 86400000);
-
-    const [quote, chartHist, fullHist] = await Promise.all([
-      yahooFinance.quote(ticker),
-      yahooFinance.chart(ticker, { period1: chartPeriod1, interval: cfg.interval }),
-      isIntraday || cfg.historyDays > cfg.chartDays
-        ? yahooFinance.chart(ticker, { period1: histPeriod1, interval: '1d' })
-        : Promise.resolve(null),
+    const [quote, chartCandles, histCandles, profile, metric] = await Promise.all([
+      fhQuote(ticker),
+      fhCandles(ticker, cfg.resolution, fromChart, now),
+      isIntraday ? fhCandles(ticker, 'D', fromHist, now) : Promise.resolve(null),
+      fhProfile(ticker),
+      fhMetric(ticker),
     ]);
 
-    const rawChartQuotes = chartHist.quotes.filter(q => q.close != null);
-    // For 1D: only show regular market hours (9:30–16:00 ET)
+    // For 1D: filter to market hours 9:30–16:00 ET
     const chartQuotes = range === '1D'
-      ? rawChartQuotes.filter(q => {
+      ? chartCandles.filter(q => {
           const d = new Date(q.date);
-          const etHour = d.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false });
-          const etMin  = d.toLocaleString('en-US', { timeZone: 'America/New_York', minute: 'numeric' });
-          const mins = parseInt(etHour) * 60 + parseInt(etMin);
-          return mins >= 570 && mins <= 960; // 9:30 (570) to 16:00 (960)
+          const etHour = parseInt(d.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }));
+          const etMin  = parseInt(d.toLocaleString('en-US', { timeZone: 'America/New_York', minute: 'numeric' }));
+          const mins = etHour * 60 + etMin;
+          return mins >= 570 && mins <= 960;
         })
-      : rawChartQuotes;
-    const dailyQuotes = isIntraday
-      ? (fullHist?.quotes ?? []).filter(q => q.close)
-      : cfg.historyDays > cfg.chartDays
-        ? (fullHist?.quotes ?? []).filter(q => q.close)
-        : chartQuotes;
+      : chartCandles;
 
-    const dailyCloses = dailyQuotes.map(q => q.close);
-    const fullInd = calcIndicators(dailyCloses);
+    const dailyQuotes = isIntraday ? (histCandles ?? chartQuotes) : chartQuotes;
 
     const chartStart = dailyQuotes.length - chartQuotes.length;
-    const { rsiData, macdData, ma50ForChart, ma200ForChart } = calcIndicatorsForRange(dailyQuotes, Math.max(0, chartStart));
+    const { indicators: fullInd, rsiData, macdData, ma50ForChart, ma200ForChart } =
+      calcIndicatorsForRange(dailyQuotes, Math.max(0, chartStart));
 
     const chartData = chartQuotes.map((q, i) => ({
       date: q.date,
@@ -250,20 +283,20 @@ app.get('/api/analysis/:ticker', async (req, res) => {
     }));
 
     const { support, resistance } = calcSupportResistance(chartQuotes);
-    const currentPrice = quote.regularMarketPrice;
+    const m = metric?.metric ?? {};
 
     const payload = {
       ticker, range,
-      name: quote.longName || quote.shortName || ticker,
-      currentPrice,
-      dailyChange: quote.regularMarketChange,
-      dailyChangePct: quote.regularMarketChangePercent,
-      dayHigh: quote.regularMarketDayHigh,
-      dayLow:  quote.regularMarketDayLow,
-      week52High: quote.fiftyTwoWeekHigh,
-      week52Low:  quote.fiftyTwoWeekLow,
-      marketCap: quote.marketCap,
-      peRatio:   quote.trailingPE,
+      name: profile.name || ticker,
+      currentPrice: quote.c,
+      dailyChange: quote.d,
+      dailyChangePct: quote.dp,
+      dayHigh: quote.h,
+      dayLow:  quote.l,
+      week52High: m['52WeekHigh'] ?? null,
+      week52Low:  m['52WeekLow']  ?? null,
+      marketCap: (profile.marketCapitalization ?? 0) * 1e6,
+      peRatio:   m.peNormalizedAnnual ?? m.peTTM ?? null,
       indicators: {
         rsi:  fullInd.rsi  ? parseFloat(fullInd.rsi.toFixed(2))  : null,
         macd: fullInd.macd ? { macd: parseFloat((fullInd.macd.MACD??0).toFixed(4)), signal: parseFloat((fullInd.macd.signal??0).toFixed(4)), histogram: parseFloat((fullInd.macd.histogram??0).toFixed(4)) } : null,
@@ -316,8 +349,9 @@ app.get('/api/news/:ticker', async (req, res) => {
 app.get('/api/quote/:ticker', async (req, res) => {
   try {
     const ticker = req.params.ticker.toUpperCase();
-    const q = await yahooFinance.quote(ticker);
-    res.json({ ticker, name: q.longName || q.shortName || ticker, price: q.regularMarketPrice, change: q.regularMarketChange, changePct: q.regularMarketChangePercent });
+    const [q, profile] = await Promise.all([fhQuote(ticker), fhProfile(ticker)]);
+    if (!q.c) return res.status(404).json({ error: 'Ticker no encontrado' });
+    res.json({ ticker, name: profile.name || ticker, price: q.c, change: q.d, changePct: q.dp });
   } catch { res.status(404).json({ error: 'Ticker no encontrado' }); }
 });
 
